@@ -33,16 +33,17 @@ class _vInfo {
 
 class _transform {
 	/** @type {number} */
-	time;
+	index;
+	/** @type {vec3} */
+	value = null;
 	/** @type {qtn} */
 	rot = null;
-	/** @type {vec3} */
-	scale = null;
-	/** @type {vec3} */
-	translate = null;
 }
 
-class Geometry2d {
+/**
+ * 板状オブジェクト
+ */
+class Plate {
 	/** @type {vec2[][]} */
 	#lines = [];
 
@@ -62,7 +63,7 @@ class Geometry2d {
 		line.push(new vec2(w, -h));
 		line.push(new vec2(w, h));
 		line.push(new vec2(-w, h));
-		Geometry2d.#rotTrans(line, angle, x, y);
+		Plate.#rotTrans(line, angle, x, y);
 		this.#lines.push(line);
 	}
 
@@ -114,18 +115,18 @@ class Geometry2d {
 				r * Math.sin(th)
 			));
 		}
-		Geometry2d.#rotTrans(line, angle, x, y);
+		Plate.#rotTrans(line, angle, x, y);
 		this.#lines.push(line);
 	}
 
 	/**
-	 * オブジェクトを作成
+	 * モデルを作成
 	 * @param {number} bottom
 	 * @param {number} height
 	 * @param {string} name
 	 * @param {Color} color
 	 */
-	createObject(bottom, height, name="", color=Color.GREEN) {
+	createModel(bottom, height, name="", color=Color.GREEN) {
 		/** @type {number[][]} */
 		let indexesBottom = [];
 		/** @type {number[][]} */
@@ -136,9 +137,10 @@ class Geometry2d {
 
 		let group = new Group(name, 0);
 		group.usemtl = name;
-		group.kd.setFrom(color);
-		group.ka.setFrom(color.light(0.3));
-		group.ks.setFrom(Color.WHITE);
+		group.kd.copyFrom(color);
+		group.ka.copyFrom(color.light(0.3));
+		group.ks.copyFrom(Color.WHITE);
+		group.ni = 1.75;
 		group.ns = 20;
 		let retModel = new Model();
 		retModel.grp.push(group);
@@ -176,8 +178,8 @@ class Geometry2d {
 		// 穴部分に該当する線をマージ
 		const BOTTOM_ORDER = -1;
 		const TOP_ORDER = 1;
-		Geometry2d.#margeLines(tempVerts, indexesBottom, BOTTOM_ORDER);
-		Geometry2d.#margeLines(tempVerts, indexesTop, TOP_ORDER);
+		Plate.#margeLines(tempVerts, indexesBottom, BOTTOM_ORDER);
+		Plate.#margeLines(tempVerts, indexesTop, TOP_ORDER);
 
 		// 底面を出力
 		for (let i = 0; i < indexesBottom.length; i++) {
@@ -187,7 +189,7 @@ class Geometry2d {
 			}
 			/** @type {_face[]} */
 			let s = [];
-			Geometry2d.#createPolygon(tempVerts, index, s, BOTTOM_ORDER);
+			Plate.#createPolygon(tempVerts, index, s, BOTTOM_ORDER);
 			for (let j = 0; j < s.length; j++) {
 				var f = s[j];
 				retModel.idx.push(f.a, f.o, f.b);
@@ -203,7 +205,7 @@ class Geometry2d {
 			}
 			/** @type {_face[]} */
 			let s = [];
-			Geometry2d.#createPolygon(tempVerts, index, s, TOP_ORDER);
+			Plate.#createPolygon(tempVerts, index, s, TOP_ORDER);
 			for (let j = 0; j < s.length; j++) {
 				var f = s[j];
 				retModel.idx.push(f.a, f.o, f.b);
@@ -288,6 +290,9 @@ class Geometry2d {
 		 */
 		let vb;
 
+		let oa = new vec2();
+		let ob = new vec2();
+
 		/*** 頂点数 */
 		let vertexCount = 0;
 		/*** 逆面数 */
@@ -339,7 +344,9 @@ class Geometry2d {
 				vb = vertex[index[ixB]];
 
 				/*** 三角形(va,vo,vb)の表裏を確認 */
-				let aobNormal = va.sub(vo).cross(vb.sub(vo)) * order;
+				oa.sub(va, vo);
+				ob.sub(vb, vo);
+				let aobNormal = oa.cross(ob) * order;
 				if (aobNormal < 0) {
 					// [裏の場合]
 					reverseCount++;
@@ -370,7 +377,7 @@ class Geometry2d {
 						continue;
 					}
 					let p = vertex[index[i]];
-					if (Geometry2d.#hasInnerPoint(va, vo, vb, p)) {
+					if (Plate.#hasInnerPoint(va, vo, vb, p)) {
 						pointInTriangle = true;
 						break;
 					}
@@ -412,9 +419,21 @@ class Geometry2d {
 	 * @returns {boolean}
 	 */
 	static #hasInnerPoint(a, o, b, p) {
-		let oapNormal = o.sub(a).cross(p.sub(a));
-		let bopNormal = b.sub(o).cross(p.sub(o));
-		let abpNormal = a.sub(b).cross(p.sub(b));
+		let aox = o.x - a.x;
+		let aoy = o.y - a.y;
+		let obx = b.x - o.x;
+		let oby = b.y - o.y;
+		let bax = a.x - b.x;
+		let bay = a.y - b.y;
+		let apx = p.x - a.x;
+		let apy = p.y - a.y;
+		let opx = p.x - o.x;
+		let opy = p.y - o.y;
+		let bpx = p.x - b.x;
+		let bpy = p.y - b.y;
+		let oapNormal = aox*apy - aoy*apx;
+		let bopNormal = obx*opy - oby*opx;
+		let abpNormal = bax*bpy - bay*bpx;
 		if (oapNormal > 0 && bopNormal > 0 && abpNormal > 0) {
 			return true;
 		}
@@ -451,13 +470,13 @@ class Geometry2d {
 				let innerA = vertex[inner.a];
 				let innerO = vertex[inner.o];
 				let innerB = vertex[inner.b];
-				if (Geometry2d.#hasInnerPoint(outerA, outerO, outerB, innerA)) {
+				if (Plate.#hasInnerPoint(outerA, outerO, outerB, innerA)) {
 					return true;
 				}
-				if (Geometry2d.#hasInnerPoint(outerA, outerO, outerB, innerO)) {
+				if (Plate.#hasInnerPoint(outerA, outerO, outerB, innerO)) {
 					return true;
 				}
-				if (Geometry2d.#hasInnerPoint(outerA, outerO, outerB, innerB)) {
+				if (Plate.#hasInnerPoint(outerA, outerO, outerB, innerB)) {
 					return true;
 				}
 			}
@@ -500,9 +519,9 @@ class Geometry2d {
 				let outerSurf = [];
 				/** @type {_face[]} */
 				let innerSurf = [];
-				let outerS = Geometry2d.#createPolygon(vertex, indexes[ixOuter], outerSurf, order);
-				let innerS = Geometry2d.#createPolygon(vertex, indexes[ixInner], innerSurf, order);
-				if (innerS < outerS && Geometry2d.#hasInnerPolygon(outerSurf, innerSurf, vertex)) {
+				let outerS = Plate.#createPolygon(vertex, indexes[ixOuter], outerSurf, order);
+				let innerS = Plate.#createPolygon(vertex, indexes[ixInner], innerSurf, order);
+				if (innerS < outerS && Plate.#hasInnerPolygon(outerSurf, innerSurf, vertex)) {
 					inner.parent = ixOuter;
 					inner.depth++;
 				}
@@ -589,17 +608,16 @@ class Geometry2d {
 	}
 
 	/**
-	 * @param {vec2[]} line
+	 * @param {vec2[]} vert
 	 * @param {number} angle
 	 * @param {number} tx
 	 * @param {number} ty
 	 */
-	static #rotTrans(line, angle, tx, ty) {
-		var rad = angle*Math.PI/180;
-		var rotX = Math.cos(rad);
-		var rotY = Math.sin(rad);
-		for (let i=0; i<line.length; i++) {
-			var v = line[i];
+	static #rotTrans(vert, angle, tx, ty) {
+		var rotX = Math.cos(angle);
+		var rotY = Math.sin(angle);
+		for (let i=0; i<vert.length; i++) {
+			var v = vert[i];
 			var rx = v.x * rotX - v.y * rotY;
 			var ry = v.x * rotY + v.y * rotX;
 			v.x = rx + tx;
@@ -608,177 +626,238 @@ class Geometry2d {
 	}
 }
 
+/**
+ * 筒状オブジェクト
+ */
 class Cylinder {
+	/**
+	 * 回転量
+	 * @type {qtn}
+	 */
+	rotation;
+
+	/**
+	 * 平行移動量
+	 * @type {vec3}
+	 */
+	translate;
+
 	/** @type {_transform[]} */
 	#scaleList;
 	/** @type {_transform[]} */
 	#rotList;
 	/** @type {_transform[]} */
-	#transList;
-
+	#posList;
+	/** @type {number} */
+	#indexMax;
+	/** @type {number} */
+	#rotDivCount;
 	/** @type {vec3[][]} */
-	#ver;
+	#vertex;
 	/** @type {number[]} */
-	#idx;
+	#index;
 
 	/**
-	 * @param {number} lenDiv 長手方向分割数
-	 * @param {number} rotDiv 回転分割数
+	 * 筒状オブジェクトを作成
+	 * @param {number} divCount 断面数
+	 * @param {number} rotDivCount 断面の回転分割数
+	 * @param {boolean} jointTerm 始端と終端をつなぐかどうか
+	 * @param {boolean} fillStart 始端を塞ぐかどうか
+	 * @param {boolean} fillEnd 終端を塞ぐかどうか
 	 */
-	constructor(lenDiv, rotDiv) {
+	constructor(divCount, rotDivCount, jointTerm=false, fillStart=false, fillEnd=false) {
+		this.rotation = new qtn();
+		this.rotation.setRot([0,1,0], 0);
+		this.translate = new vec3();
 		this.#scaleList = [];
 		this.#rotList = [];
-		this.#transList = [];
-		this.#ver = [];
-		for (let j=0; j<lenDiv; j++) {
-			/** @type {vec3[]} */
-			let tempVer = [];
-			for (let i=0; i<rotDiv; i++) {
-				let th = 2 * Math.PI * i / rotDiv;
-				let x = Math.cos(th) * 0.5;
-				let z = Math.sin(th) * 0.5;
-				tempVer.push(new vec3(x, 0, z));
-			}
-			this.#ver.push(tempVer);
-		}
-		this.#idx = [];
-		for (let j=0; j<lenDiv-1; j++) {
-			let ofsBottom = rotDiv*j;
-			let ofsTop = rotDiv*(j+1);
-			for (let il=0; il<rotDiv; il++) {
-				let ir = (il+1) % rotDiv;
-				let bl = ofsBottom + il;
-				let br = ofsBottom + ir;
-				let tl = ofsTop + il;
-				let tr = ofsTop + ir;
-				this.#idx.push(br, bl, tl);
-				this.#idx.push(tl, tr, br);
-			}
-		}
+		this.#posList = [];
+		this.#indexMax = divCount - 1;
+		this.#rotDivCount = rotDivCount;
+		this.#createVertex();
+		this.#createIndex(jointTerm, fillStart, fillEnd);
 	}
 
 	/**
-	 * @param {number} time
-	 * @param {qtn} q
+	 * 断面のスケール設定をクリア
 	 */
-	addRot(time, q) {
-		let t = new _transform();
-		t.time = time;
-		t.rot = new qtn();
-		t.rot.setFrom(q);
-		this.#rotList.push(t);
+	clearScale() {
+		this.#scaleList = [];
 	}
 
 	/**
-	 * @param {number} time
+	 * 断面のスケールを設定
+	 * @param {number} index 対象断面のインデックス(0:始端～断面数-1:終端)
 	 * @param {number} w
 	 * @param {number} h
 	 */
-	addScale(time, w, h) {
+	addScale(index, w, h) {
 		let t = new _transform();
-		t.time = time;
-		t.scale = new vec3(w, 1, h);
+		t.index = index;
+		t.value = new vec3(w, h, 1);
 		this.#scaleList.push(t);
 	}
 
 	/**
-	 * @param {number} time
-	 * @param {number} dx
-	 * @param {number} dy
-	 * @param {number} dz
+	 * 断面のスケールを設定
+	 * @param {number} time 断面の位置(0:始端～1:終端)
+	 * @param {number} w
+	 * @param {number} h
 	 */
-	addTranslate(time, dx, dy, dz) {
+	addScaleAtTime(time, w, h) {
 		let t = new _transform();
-		t.time = time;
-		t.translate = new vec3(dx, dy, dz);
-		this.#transList.push(t);
+		t.index = time*this.#indexMax;
+		t.value = new vec3(w, h, 1);
+		this.#scaleList.push(t);
 	}
 
 	/**
-	 * オブジェクトを作成
+	 * 断面の回転量設定をクリア
+	 */
+	clearRot() {
+		this.#rotList = [];
+	}
+
+	/**
+	 * 断面の回転量を設定
+	 * @param {number} index 対象断面のインデックス(0:始端～断面数-1:終端)
+	 * @param {qtn} q
+	 */
+	addRot(index, q) {
+		let t = new _transform();
+		t.index = index;
+		t.rot = new qtn();
+		t.rot.copyFrom(q);
+		this.#rotList.push(t);
+	}
+
+	/**
+	 * 断面の回転量を設定
+	 * @param {number} time 断面の位置(0:始端～1:終端)
+	 * @param {qtn} q
+	 */
+	addRotAtTime(time, q) {
+		let t = new _transform();
+		t.index = time*this.#indexMax;
+		t.rot = new qtn();
+		t.rot.copyFrom(q);
+		this.#rotList.push(t);
+	}
+
+	/**
+	 * 断面の中心位置設定をクリア
+	 */
+	clearPos() {
+		this.#posList = [];
+	}
+
+	/**
+	 * 断面の中心位置を設定
+	 * @param {number} index 対象断面のインデックス(0:始端～断面数-1:終端)
+	 * @param {number} x
+	 * @param {number} y
+	 * @param {number} z
+	 */
+	addPos(index, x, y, z) {
+		let t = new _transform();
+		t.index = index;
+		t.value = new vec3(x, y, z);
+		this.#posList.push(t);
+	}
+
+	/**
+	 * 断面の中心位置を設定
+	 * @param {number} time 断面の位置(0:始端～1:終端)
+	 * @param {number} x
+	 * @param {number} y
+	 * @param {number} z
+	 */
+	addPosAtTime(time, x, y, z) {
+		let t = new _transform();
+		t.index = time*this.#indexMax;
+		t.value = new vec3(x, y, z);
+		this.#posList.push(t);
+	}
+
+	/**
+	 * モデルを作成
 	 * @param {string} name
 	 * @param {Color} color
 	 */
-	createObject(name="", color=Color.GREEN) {
+	createModel(name="", color=Color.GREEN) {
+		let retModel = new Model();
+
 		let group = new Group(name, 0);
 		group.usemtl = name;
-		group.kd.setFrom(color);
-		group.ka.setFrom(color.light(0.3));
-		group.ks.setFrom(Color.WHITE);
+		group.kd.copyFrom(color);
+		group.ka.copyFrom(color.light(0.3));
+		group.ks.copyFrom(Color.WHITE);
+		group.ni = 1.75;
 		group.ns = 20;
-		group.indexCount = this.#idx.length;
-
-		let retModel = new Model();
+		group.indexCount = this.#index.length;
 		retModel.grp.push(group);
 
-		let timeMax = this.#ver[0].length-1;
+		for (let i=0; i<this.#index.length; i++) {
+			retModel.idx.push(this.#index[i]);
+		}
 
-		// スケーリング
-		for (let t=0; t<=timeMax; t++) {
-			let scale = this.#getScale(t / timeMax);
-			let outline = this.#ver[t];
+		for (let j=0; j<=this.#indexMax; j++) {
+			let scale = this.#getScale(j);
+			let rot = this.#getRot(j);
+			let pos = this.#getPos(j);
+			let outline = this.#vertex[j];
+			let p = new vec3();
 			for (let i=0; i<outline.length; i++) {
-				let v = outline[i];
-				v.x *= scale.x;
-				v.z *= scale.z;
+				p.copyFrom(outline[i]);
+				p.hadamard(scale);
+				rot.apply(p, p);
+				p.add(p, pos);
+				this.rotation.apply(p, p);
+				p.add(p, this.translate);
+				retModel.ver.push(p.x, p.y, p.z);
 			}
 		}
-		// 回転
-		for (let t=0; t<=timeMax; t++) {
-			let rot = this.#getRot(t / timeMax);
-			let outline = this.#ver[t];
-			for (let i=0; i<outline.length; i++) {
-				let v = outline[i];
-				rot.rotVec3(v, v);
-			}
-		}
-		// 平行移動
-		for (let t=0; t<=timeMax; t++) {
-			let trans = this.#getTrans(t / timeMax);
-			let outline = this.#ver[t];
-			for (let i=0; i<outline.length; i++) {
-				let v = outline[i];
-				retModel.ver.push(v.x + trans.x, v.y + trans.y, v.z + trans.z);
-			}
-		}
-		// インデックス
-		for (let i=0; i<this.#idx.length; i++) {
-			retModel.idx.push(this.#idx[i]);
-		}
+
 		return retModel;
 	}
 
 	/**
-	 * @param {number} time
+	 * @param {number} index
 	 * @returns {vec3}
 	 */
-	#getScale(time) {
+	#getScale(index) {
 		let list = this.#scaleList;
 		let ixMax = list.length-1;
+		let ret = new vec3();
+		let sa = new vec3();
+		let sb = new vec3();
 		for (let i=0; i<=ixMax; i++) {
 			let a = list[i];
 			let b = list[Math.min(i+1, ixMax)];
-			if (a.time <= time && b.time >= time) {
-				let a2b = (time - a.time) / (b.time - a.time);
-				let sa = a.scale.scale(1-a2b);
-				let sb = b.scale.scale(a2b);
-				return sa.add(sb);
+			if (a.index <= index && b.index >= index) {
+				let a2b = (index - a.index) / (b.index - a.index);
+				sa.copyFrom(a.value);
+				sa.scale(1-a2b);
+				sb.copyFrom(b.value);
+				sb.scale(a2b);
+				ret.add(sa, sb);
+				return ret;
 			}
 		}
 	}
 
 	/**
-	 * @param {number} time
+	 * @param {number} index
 	 * @returns {qtn}
 	 */
-	#getRot(time) {
+	#getRot(index) {
 		let list = this.#rotList;
 		let ixMax = list.length-1;
 		for (let i=0; i<=ixMax; i++) {
 			let a = list[i];
 			let b = list[Math.min(i+1, ixMax)];
-			if (a.time <= time && b.time >= time) {
-				let a2b = (time - a.time) / (b.time - a.time);
+			if (a.index <= index && b.index >= index) {
+				let a2b = (index - a.index) / (b.index - a.index);
 				let q = new qtn();
 				q.setSlerp(a.rot, b.rot, a2b);
 				return q;
@@ -787,20 +866,88 @@ class Cylinder {
 	}
 
 	/**
-	 * @param {number} time
+	 * @param {number} index
 	 * @returns {vec3}
 	 */
-	#getTrans(time) {
-		let list = this.#transList;
+	#getPos(index) {
+		let list = this.#posList;
 		let ixMax = list.length-1;
+		let pa = new vec3();
+		let pb = new vec3();
+		let ret = new vec3();
 		for (let i=0; i<=ixMax; i++) {
 			let a = list[i];
 			let b = list[Math.min(i+1, ixMax)];
-			if (a.time <= time && b.time >= time) {
-				let a2b = (time - a.time) / (b.time - a.time);
-				let ta = a.translate.scale(1-a2b);
-				let tb = b.translate.scale(a2b);
-				return ta.add(tb);
+			if (a.index <= index && b.index >= index) {
+				let a2b = (index - a.index) / (b.index - a.index);
+				pa.copyFrom(a.value);
+				pa.scale(1-a2b);
+				pb.copyFrom(b.value);
+				pb.scale(a2b);
+				ret.add(pa, pb);
+				return ret;
+			}
+		}
+	}
+
+	#createVertex() {
+		this.#vertex = [];
+		for (let j=0; j<=this.#indexMax; j++) {
+			/** @type {vec3[]} */
+			let outline = [];
+			for (let i=0; i<this.#rotDivCount; i++) {
+				let th = -2 * Math.PI * i / this.#rotDivCount;
+				let x = Math.cos(th) * 0.5;
+				let y = Math.sin(th) * 0.5;
+				outline.push(new vec3(x, y, 0));
+			}
+			this.#vertex.push(outline);
+		}
+	}
+
+	/**
+	 * @param {boolean} jointTerm
+	 * @param {boolean} fillStart
+	 * @param {boolean} fillEnd
+	 */
+	#createIndex(jointTerm, fillStart, fillEnd) {
+		this.#index = [];
+		let divCount = this.#indexMax + 1;
+		let lastDiv = jointTerm ? divCount : this.#indexMax;
+		for (let j=0; j<lastDiv; j++) {
+			let ofsBottom = this.#rotDivCount*j;
+			let ofsTop = this.#rotDivCount*((j+1)%divCount);
+			for (let il=0; il<this.#rotDivCount; il++) {
+				let ir = (il+1) % this.#rotDivCount;
+				let bl = ofsBottom + il;
+				let br = ofsBottom + ir;
+				let tl = ofsTop + il;
+				let tr = ofsTop + ir;
+				this.#index.push(br, bl, tl);
+				this.#index.push(tl, tr, br);
+			}
+		}
+		if (fillStart) {
+			let ofsTop = this.#rotDivCount - 1;
+			let divH = this.#rotDivCount >> 1;
+			for (let bl=0,br=1; bl<divH; bl++,br++) {
+				let tl = ofsTop - bl;
+				let tr = ofsTop - br;
+				this.#index.push(tl, bl, br);
+				this.#index.push(br, tr, tl);
+			}
+		}
+		if (fillEnd) {
+			let ofsBottom = this.#rotDivCount*this.#indexMax;
+			let ofsTop = ofsBottom + this.#rotDivCount - 1;
+			let divH = this.#rotDivCount >> 1;
+			for (let il=0,ir=1; il<divH; il++,ir++) {
+				let bl = ofsBottom + il;
+				let br = ofsBottom + ir;
+				let tl = ofsTop - il;
+				let tr = ofsTop - ir;
+				this.#index.push(br, bl, tl);
+				this.#index.push(tl, tr, br);
 			}
 		}
 	}
